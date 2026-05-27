@@ -39,7 +39,8 @@ public class DiffTabTracker {
     }
 
     public static void setResponse(String tabName, OpenDiffResult result) {
-        AsyncHandler handler = pendingDiffs.getOrDefault(tabName, null);
+        // Consume the handler so a subsequent tab close does not also fire DIFF_REJECTED.
+        AsyncHandler handler = pendingDiffs.remove(tabName);
         if (handler != null) {
             handler.sendResponse(result);
         } else {

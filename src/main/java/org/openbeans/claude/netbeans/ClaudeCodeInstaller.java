@@ -115,6 +115,9 @@ public class ClaudeCodeInstaller extends ModuleInstall implements PropertyChange
     private void startMCPServer() {
         RP.post(() -> {
             try {
+                // Validate incoming connections against the same token written to the lock file
+                mcpServer.setAuthToken(lockFileManager.getAuthToken());
+
                 // Start the WebSocket server
                 if (mcpServer.start()) {
                     int port = mcpServer.getPort();

@@ -12,6 +12,7 @@ import org.openide.filesystems.FileObject;
 import org.openide.filesystems.FileUtil;
 import org.openide.loaders.DataObject;
 import org.openide.nodes.Node;
+import org.openide.util.Mutex;
 import org.openide.windows.TopComponent;
 
 import javax.swing.text.Document;
@@ -167,7 +168,10 @@ public class NetBeansMCPHandler {
      */
     private JsonNode handleInitialize(JsonNode params) {
         ObjectNode result = responseBuilder.objectNode();
-        result.put("protocolVersion", "2024-11-05");
+        // Echo the client's requested protocol version when present, falling back to a known-good default.
+        String protocolVersion = (params != null && params.hasNonNull("protocolVersion"))
+                ? params.get("protocolVersion").asText() : "2024-11-05";
+        result.put("protocolVersion", protocolVersion);
         
         ObjectNode capabilities = responseBuilder.objectNode();
         
@@ -246,53 +250,19 @@ public class NetBeansMCPHandler {
         JsonNode arguments = params.get("arguments");
         
         try {
-            Object result;
-
-            switch (toolName) {
-                // Core Claude Code tools
-                case "openFile":
-                    result = this.openFileTool.run(this.openFileTool.parseArguments(arguments));
-                    break;
-
-                case "getWorkspaceFolders":
-                    result = this.getWorkspaceFoldersTool.run(this.getWorkspaceFoldersTool.parseArguments(arguments));
-                    break;
-
-                case "getOpenEditors":
-                    result = this.getOpenEditorsTool.run(this.getOpenEditorsTool.parseArguments(arguments));
-                    break;
-
-                case "getCurrentSelection":
-                    result = this.getCurrentSelectionTool.run(this.getCurrentSelectionTool.parseArguments(arguments));
-                    break;
-
-                case "close_tab":
-                    result = this.closeTabTool.run(this.closeTabTool.parseArguments(arguments));
-                    break;
-
-                case "getDiagnostics":
-                    result = this.getDiagnosticsTool.run(this.getDiagnosticsTool.parseArguments(arguments));
-                    break;
-
-                case "checkDocumentDirty":
-                    result = this.checkDocumentDirtyTool.run(this.checkDocumentDirtyTool.parseArguments(arguments));
-                    break;
-
-                case "saveDocument":
-                    result = this.saveDocument.run(this.saveDocument.parseArguments(arguments));
-                    break;
-
-                case "closeAllDiffTabs":
-                    result = this.closeAllDiffTabsTool.run(this.closeAllDiffTabsTool.parseArguments(arguments));
-                    break;
-
-                case "openDiff":
-                    result = this.openDiffTool.run(this.openDiffTool.parseArguments(arguments));
-                    break;
-
-                default:
-                    throw new IllegalArgumentException("Unknown tool: " + toolName);
-            }
+            // Tools read/modify editor, window and document state through Swing/Window-System
+            // APIs that are only safe on the AWT event thread. Running them on the WebSocket
+            // worker thread can deadlock against IDE UI operations (e.g. opening a MultiView
+            // editor), so dispatch every tool call on the event thread.
+            Object result = Mutex.EVENT.readAccess((Mutex.Action<Object>) () -> {
+                try {
+                    return dispatchTool(toolName, arguments);
+                } catch (RuntimeException re) {
+                    throw re;
+                } catch (Exception ex) {
+                    throw new IllegalStateException(ex);
+                }
+            });
 
             // Check if result is async
             if (result instanceof AsyncResponse) {
@@ -310,9 +280,43 @@ public class NetBeansMCPHandler {
             return responseBuilder.createToolResponse(result);
 
         } catch (Exception e) {
-            LOGGER.log(Level.SEVERE, "Error executing tool: " + toolName, e);
-            
-            return responseBuilder.createToolResponse("Error: " + e.getMessage());
+            // Mutex.Action wraps checked tool exceptions in IllegalStateException; unwrap for the message.
+            Throwable cause = (e instanceof IllegalStateException && e.getCause() != null) ? e.getCause() : e;
+            LOGGER.log(Level.SEVERE, "Error executing tool: " + toolName, cause);
+
+            return responseBuilder.createToolResponse("Error: " + cause.getMessage());
+        }
+    }
+
+    /**
+     * Dispatches a tool call to its implementation. Must run on the AWT event thread
+     * (see {@link #handleToolsCall}); the tools access Swing/editor/window state.
+     */
+    private Object dispatchTool(String toolName, JsonNode arguments) throws Exception {
+        switch (toolName) {
+            // Core Claude Code tools
+            case "openFile":
+                return this.openFileTool.run(this.openFileTool.parseArguments(arguments));
+            case "getWorkspaceFolders":
+                return this.getWorkspaceFoldersTool.run(this.getWorkspaceFoldersTool.parseArguments(arguments));
+            case "getOpenEditors":
+                return this.getOpenEditorsTool.run(this.getOpenEditorsTool.parseArguments(arguments));
+            case "getCurrentSelection":
+                return this.getCurrentSelectionTool.run(this.getCurrentSelectionTool.parseArguments(arguments));
+            case "close_tab":
+                return this.closeTabTool.run(this.closeTabTool.parseArguments(arguments));
+            case "getDiagnostics":
+                return this.getDiagnosticsTool.run(this.getDiagnosticsTool.parseArguments(arguments));
+            case "checkDocumentDirty":
+                return this.checkDocumentDirtyTool.run(this.checkDocumentDirtyTool.parseArguments(arguments));
+            case "saveDocument":
+                return this.saveDocument.run(this.saveDocument.parseArguments(arguments));
+            case "closeAllDiffTabs":
+                return this.closeAllDiffTabsTool.run(this.closeAllDiffTabsTool.parseArguments(arguments));
+            case "openDiff":
+                return this.openDiffTool.run(this.openDiffTool.parseArguments(arguments));
+            default:
+                throw new IllegalArgumentException("Unknown tool: " + toolName);
         }
     }
 

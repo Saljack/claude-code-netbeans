@@ -19,12 +19,27 @@ public class WebSocketMCPServer {
     private static final int PORT_RANGE_START = 8990;
     private static final int PORT_RANGE_END = 9100;
     
+    private static final String AUTH_HEADER = "x-claude-code-ide-authorization";
+
     private Server server;
     private int port;
     private final NetBeansMCPHandler mcpHandler;
-    
+    private volatile String authToken;
+
     public WebSocketMCPServer(NetBeansMCPHandler mcpHandler) {
         this.mcpHandler = mcpHandler;
+    }
+
+    /**
+     * Sets the auth token that incoming WebSocket connections must present in the
+     * {@value #AUTH_HEADER} header (it is the same token written to the lock file).
+     * Must be set before {@link #start()} so connections are validated. When null,
+     * no validation is performed.
+     *
+     * @param authToken the expected auth token
+     */
+    public void setAuthToken(String authToken) {
+        this.authToken = authToken;
     }
     
     /**
@@ -61,6 +76,21 @@ public class WebSocketMCPServer {
                 
                 // Add WebSocket endpoint with subprotocol negotiation
                 wsContainer.addMapping("/", (upgradeRequest, upgradeResponse) -> {
+                    // Validate the auth token Claude Code sends, matching the one in the lock file.
+                    if (authToken != null) {
+                        String provided = upgradeRequest.getHeader(AUTH_HEADER);
+                        if (!authToken.equals(provided)) {
+                            LOGGER.warning("Rejecting WebSocket connection: missing or invalid auth token");
+                            // sendError commits a real 401; returning null alone makes Jetty emit 503.
+                            try {
+                                upgradeResponse.sendError(401, "Unauthorized");
+                            } catch (java.io.IOException ioe) {
+                                LOGGER.log(Level.WARNING, "Failed to send 401 response", ioe);
+                            }
+                            return null;
+                        }
+                    }
+
                     // Handle MCP subprotocol negotiation
                     java.util.List<String> subprotocols = upgradeRequest.getSubProtocols();
                     if (subprotocols != null) {

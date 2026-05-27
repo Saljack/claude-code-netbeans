@@ -19,8 +19,8 @@ A NetBeans IDE plugin that provides integration with Claude Code through the Mod
 
 ### Prerequisites
 
-- NetBeans IDE 23.0 or later
-- Java 11 or later
+- NetBeans IDE 29.0 or later
+- Java 17 or later
 - Maven 3.6 or later
 
 ### Building the Plugin
@@ -33,7 +33,7 @@ A NetBeans IDE plugin that provides integration with Claude Code through the Mod
 mvn clean package
 ```
 
-4. The plugin will be built as `target/claude-code-netbeans-1.0.0.nbm`
+4. The plugin will be built as `target/claude-code-netbeans-1.3.0.nbm`
 
 ### Installing in NetBeans
 
@@ -162,7 +162,7 @@ mvn clean package
 
 ### Plugin Not Loading
 - Check NetBeans logs: **View > IDE Log**
-- Verify Java 11+ is being used
+- Verify Java 17+ is being used
 - Ensure all dependencies are available
 
 ### Claude Code Not Connecting

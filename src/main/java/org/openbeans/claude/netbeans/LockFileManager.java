@@ -30,11 +30,24 @@ public class LockFileManager {
     private static final String CLAUDE_DIR = ".claude";
     private static final String IDE_DIR = "ide";
     private final ObjectMapper objectMapper;
+    private final String authToken;
     private Path lockFilePath;
     private boolean lockFileCreated = false;
-    
+
     public LockFileManager() {
         this.objectMapper = new ObjectMapper();
+        this.authToken = UUID.randomUUID().toString();
+    }
+
+    /**
+     * The auth token written into the lock file. Claude Code sends this back in the
+     * "x-claude-code-ide-authorization" header on the WebSocket handshake, where the
+     * server validates it. Generated once per session.
+     *
+     * @return the auth token
+     */
+    public String getAuthToken() {
+        return authToken;
     }
     
     /**
@@ -56,7 +69,8 @@ public class LockFileManager {
             lockData.put("pid", pid);
             lockData.put("ideName", "NetBeans");
             lockData.put("transport", "ws");
-            lockData.put("authToken", UUID.randomUUID().toString());
+            lockData.put("runningInWindows", isRunningInWindows());
+            lockData.put("authToken", authToken);
             
             // Add workspace folders
             List<String> workspaceFolders = getWorkspaceFolders();
@@ -157,6 +171,11 @@ public class LockFileManager {
      * 
      * @return Process ID
      */
+    private static boolean isRunningInWindows() {
+        String osName = System.getProperty("os.name");
+        return osName != null && osName.toLowerCase().contains("win");
+    }
+
     public static long getCurrentProcessId() {
         try {
             String processName = java.lang.management.ManagementFactory.getRuntimeMXBean().getName();

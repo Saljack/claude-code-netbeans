@@ -248,9 +248,12 @@ public class OpenDiff implements Tool<OpenDiffParams, AsyncResponse<OpenDiffResu
                             contentList.add(new Content("text", finalNewFileContents));
                             OpenDiffResult result = new OpenDiffResult(contentList);
 
+                            // setResponse consumes the handler, so closing the tab below will
+                            // not re-fire as DIFF_REJECTED.
                             DiffTabTracker.setResponse(finalDiffTabName, result);
 
-                            // Note: We do not close the diff tab here. Claude Code will close the tab via command.
+                            // Close the diff tab on approval (we are on the EDT here).
+                            diffTC.close();
                         });
 
                         // Add approve button as first button in toolbar
