@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.eclipse.jetty.websocket.api.Session;
+import org.eclipse.jetty.websocket.api.WriteCallback;
 import org.netbeans.api.project.Project;
 import org.netbeans.api.project.ProjectUtils;
 import org.openide.cookies.EditorCookie;
@@ -61,6 +62,18 @@ public class NetBeansMCPHandler {
 
     
     private static final Logger LOGGER = Logger.getLogger(NetBeansMCPHandler.class.getName());
+
+    /**
+     * Shared callback for async WebSocket sends. Send sites use this so a stuck
+     * peer cannot block the calling thread (notably the EDT from caret listeners).
+     */
+    static final WriteCallback LOG_ON_FAILURE = new WriteCallback() {
+        @Override
+        public void writeFailed(Throwable cause) {
+            LOGGER.log(Level.WARNING, "WebSocket send failed", cause);
+        }
+    };
+
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final MCPResponseBuilder responseBuilder;
     private Session webSocketSession;
@@ -208,7 +221,7 @@ public class NetBeansMCPHandler {
                     "notifications/initialized", null
                 );
                 String message = objectMapper.writeValueAsString(notification);
-                webSocketSession.getRemote().sendString(message);
+                webSocketSession.getRemote().sendString(message, LOG_ON_FAILURE);
                 LOGGER.log(Level.FINE, "Sent notifications/initialized notification");
             }
         } catch (Exception e) {
@@ -338,7 +351,7 @@ public class NetBeansMCPHandler {
             response.set("result", responseBuilder.createToolResponse(result));
 
             String message = objectMapper.writeValueAsString(response);
-            webSocketSession.getRemote().sendString(message);
+            webSocketSession.getRemote().sendString(message, LOG_ON_FAILURE);
 
             LOGGER.log(Level.INFO, "Sent async tool response for request ID: {0}", requestId);
         } catch (Exception e) {
@@ -671,55 +684,83 @@ public class NetBeansMCPHandler {
                 FileObject fileObject = dataObject.getPrimaryFile();
                 
                 if (fileObject != null) {
-                    // Get file path
-                    File file = FileUtil.toFile(fileObject);
-                    String absolutePath = file.getAbsolutePath();
-                    String fileUrl = "file://" + absolutePath;
-                    
-                    // Calculate line and column positions (0-based for protocol)
-                    int startLine = NbDocument.findLineNumber(styledDoc, selectionStart);
-                    int startColumn = NbDocument.findLineColumn(styledDoc, selectionStart);
-                    int endLine = NbDocument.findLineNumber(styledDoc, selectionEnd);
-                    int endColumn = NbDocument.findLineColumn(styledDoc, selectionEnd);
-                    
-                    // Create selection_changed notification
-                    ObjectNode params = responseBuilder.objectNode();
-                    
-                    // Add text (selected text or empty string)
-                    params.put("text", selectedText != null ? selectedText : "");
-                    
-                    // Add file paths
-                    params.put("filePath", absolutePath);
-                    params.put("fileUrl", fileUrl);
-                    
-                    // Add selection object
-                    ObjectNode selection = responseBuilder.objectNode();
-                    
-                    ObjectNode start = responseBuilder.objectNode();
-                    start.put("line", startLine);
-                    start.put("character", startColumn);
-                    selection.set("start", start);
-                    
-                    ObjectNode end = responseBuilder.objectNode();
-                    end.put("line", endLine);
-                    end.put("character", endColumn);
-                    selection.set("end", end);
-                    
-                    // Set isEmpty based on whether there's selected text
-                    selection.put("isEmpty", selectedText == null || selectedText.isEmpty());
-                    
-                    params.set("selection", selection);
-                    
-                    // Create and send the notification
+                    ObjectNode params = buildSelectionChangedParams(
+                            fileObject, styledDoc, selectedText, selectionStart, selectionEnd);
+                    if (params == null) {
+                        return;
+                    }
                     ObjectNode notification = responseBuilder.createNotification("selection_changed", params);
                     String message = objectMapper.writeValueAsString(notification);
-                    webSocketSession.getRemote().sendString(message);
-                    
+                    // Async: caret events fire on the EDT, and a blocking send can
+                    // jam the EDT (and therefore all MCP tool calls) if the WebSocket
+                    // peer stops draining its buffer.
+                    webSocketSession.getRemote().sendString(message, LOG_ON_FAILURE);
+
                     LOGGER.log(Level.FINE, "Sent selection_changed event: {0}", message);
                 }
             }
         } catch (Exception e) {
             LOGGER.log(Level.WARNING, "Error sending selection change event", e);
         }
+    }
+
+    /**
+     * Builds the selection_changed payload, or returns null if the FileObject
+     * has no on-disk path (e.g. files inside a JAR or other virtual filesystem).
+     * Returning null tells the caller to skip the notification.
+     */
+    ObjectNode buildSelectionChangedParams(FileObject fileObject,
+                                            StyledDocument styledDoc,
+                                            String selectedText,
+                                            int selectionStart,
+                                            int selectionEnd) {
+        // FileUtil.toFile() returns null for non-local FileObjects.
+        File file = toLocalFile(fileObject);
+        if (file == null) {
+            return null;
+        }
+        String absolutePath = file.getAbsolutePath();
+        String fileUrl = "file://" + absolutePath;
+
+        // Calculate line and column positions (0-based for protocol)
+        int startLine = NbDocument.findLineNumber(styledDoc, selectionStart);
+        int startColumn = NbDocument.findLineColumn(styledDoc, selectionStart);
+        int endLine = NbDocument.findLineNumber(styledDoc, selectionEnd);
+        int endColumn = NbDocument.findLineColumn(styledDoc, selectionEnd);
+
+        // Create selection_changed notification
+        ObjectNode params = responseBuilder.objectNode();
+                    
+        // Add text (selected text or empty string)
+        params.put("text", selectedText != null ? selectedText : "");
+                    
+        // Add file paths
+        params.put("filePath", absolutePath);
+        params.put("fileUrl", fileUrl);
+
+        // Add selection object
+        ObjectNode selection = responseBuilder.objectNode();
+                    
+        ObjectNode start = responseBuilder.objectNode();
+        start.put("line", startLine);
+        start.put("character", startColumn);
+        selection.set("start", start);
+                    
+        ObjectNode end = responseBuilder.objectNode();
+        end.put("line", endLine);
+        end.put("character", endColumn);
+        selection.set("end", end);
+                    
+        // Set isEmpty based on whether there's selected text
+        selection.put("isEmpty", selectedText == null || selectedText.isEmpty());
+                    
+        params.set("selection", selection);
+
+        return params;
+    }
+
+    /** Test seam: wraps {@link FileUtil#toFile} so tests can simulate non-local FileObjects. */
+    File toLocalFile(FileObject fileObject) {
+        return FileUtil.toFile(fileObject);
     }
 }

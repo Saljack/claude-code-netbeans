@@ -56,7 +56,7 @@ public class MCPWebSocketHandler extends WebSocketAdapter {
             
             // Send response back if there is one
             if (response != null && getSession() != null && getSession().isOpen()) {
-                getSession().getRemote().sendString(response);
+                getSession().getRemote().sendString(response, NetBeansMCPHandler.LOG_ON_FAILURE);
                 LOGGER.log(Level.FINE, "Sent MCP response: {0}", response);
             }
             
@@ -107,7 +107,7 @@ public class MCPWebSocketHandler extends WebSocketAdapter {
                 requestId, -32603, "Internal error", errorMessage
             );
             if (getSession() != null && getSession().isOpen()) {
-                getSession().getRemote().sendString(errorResponse);
+                getSession().getRemote().sendString(errorResponse, NetBeansMCPHandler.LOG_ON_FAILURE);
             }
         } catch (Exception e) {
             LOGGER.log(Level.SEVERE, "Failed to send error response", e);
