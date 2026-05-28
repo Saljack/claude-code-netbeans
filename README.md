@@ -6,8 +6,14 @@ A NetBeans IDE plugin that provides integration with Claude Code through the Mod
 
 ![Downloads](https://img.shields.io/endpoint?url=https://openbeans.org/plugin-counter/api/118)
 
+## What's new in 2.0
+
+- **Embedded terminal**: open `Tools > Open Claude Terminal` and the `claude` CLI launches inside a dockable NetBeans tab, backed by [JediTerm](https://github.com/JetBrains/jediterm) + [pty4j](https://github.com/JetBrains/pty4j). The child process auto-binds to this NetBeans instance (via `CLAUDE_CODE_SSE_PORT` + `ENABLE_IDE_INTEGRATION`), so MCP tools such as `openDiff` and `getDiagnostics` work without any external configuration.
+- **Java 21** baseline (was 17).
+
 ## Features
 
+- **Embedded `claude` CLI**: Dockable JediTerm-backed terminal that auto-launches and auto-binds to this NetBeans instance
 - **Automatic Detection**: Creates a lock file that Claude Code CLI can discover
 - **WebSocket Communication**: Establishes real-time communication using MCP over WebSocket
 - **IDE Integration**: Provides access to NetBeans project structure, file operations, and editor content
@@ -20,8 +26,9 @@ A NetBeans IDE plugin that provides integration with Claude Code through the Mod
 ### Prerequisites
 
 - NetBeans IDE 29.0 or later
-- Java 17 or later
+- Java 21 or later (the plugin module is built against Java 21)
 - Maven 3.6 or later
+- `claude` CLI on `PATH` (override with `-J-Dclaude.code.cli=/path/to/claude` in `etc/netbeans.conf`)
 
 ### Building the Plugin
 
@@ -33,7 +40,16 @@ A NetBeans IDE plugin that provides integration with Claude Code through the Mod
 mvn clean package
 ```
 
-4. The plugin will be built as `target/claude-code-netbeans-1.3.0.nbm`
+4. The plugin will be built as `target/claude-code-netbeans-2.0.0.nbm`
+
+> **Repository access:** the 2.0 build pulls JediTerm 3.x from JetBrains' `intellij-dependencies` repo (declared in `pom.xml`). If your `~/.m2/settings.xml` mirrors all repos through a corporate Nexus/Artifactory, ensure that mirror proxies `https://packages.jetbrains.team/maven/p/ij/intellij-dependencies` or whitelist this repo (e.g. `<mirrorOf>*,!intellij-dependencies</mirrorOf>`).
+
+### Third-party libraries
+
+The 2.0 release bundles:
+
+- [JediTerm](https://github.com/JetBrains/jediterm) (LGPL-3.0) and [pty4j](https://github.com/JetBrains/pty4j) (EPL-1.0) — terminal widget and PTY backend
+- Kotlin stdlib (Apache-2.0) — runtime dependency of JediTerm 3.x
 
 ### Installing in NetBeans
 

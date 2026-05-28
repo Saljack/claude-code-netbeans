@@ -6,9 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A NetBeans IDE plugin (packaged as a `.nbm`) that makes NetBeans act as an IDE backend for the Claude Code CLI. It implements the same discovery + transport protocol that Claude Code's official IDE integrations use: a lock file under `~/.claude/ide/{port}.lock` and an MCP server over WebSocket. The MCP layer is a **hand-written JSON-RPC implementation** (the MCP Java SDK dependency is intentionally commented out in `pom.xml`).
 
+Since 2.0 the plugin also **embeds the `claude` CLI inside NetBeans** via a JediTerm-backed `TopComponent` (see "Embedded terminal" below). The MCP server still runs in the background; the embedded CLI auto-binds to this NetBeans instance.
+
 ## Build & test
 
-This module pins **Java 17** (`maven.compiler.source/target=17`, CI builds on JDK 17). Do not assume a newer JDK — the NetBeans Platform deps (`RELEASE290`, i.e. NetBeans 29) and `nbm-maven-plugin` are matched to it.
+This module pins **Java 21** (`maven.compiler.release=21`). The NetBeans Platform deps (`RELEASE290`, i.e. NetBeans 29) and `nbm-maven-plugin` 14.5 are matched to it. JediTerm 3.x publishes only to the JetBrains `intellij-dependencies` Maven repo (configured in `pom.xml`), not Maven Central.
 
 ```bash
 mvn clean package          # builds target/claude-code-netbeans-<version>.nbm
@@ -57,10 +59,28 @@ Tool names are not consistently styled — most are camelCase (`openFile`, `getD
 
 `run()` either returns a result object (sync) or an `AsyncResponse<O>` (async). When `handleToolsCall` sees an `AsyncResponse`, it returns `null` (no immediate reply), wires an `AsyncHandler`, and the reply is sent later over the WebSocket carrying the **original request id**. `OpenDiff` is the canonical async tool: it opens a diff `TopComponent` with an "Approve" button and resolves only when the user approves (`FILE_SAVED`) or closes the tab. Tab-to-handler wiring lives in the static `DiffTabTracker`; tab-close detection is a `PROP_TC_CLOSED` listener in `NetBeansMCPHandler` that fires `DIFF_REJECTED`.
 
+## Embedded terminal (2.0)
+
+`org.openbeans.claude.netbeans.terminal.ClaudeTerminalTopComponent` is a dockable `TopComponent` registered in `mode="output"` with `PERSISTENCE_NEVER`. It is opened by the `Tools > Open Claude Terminal` menu entry (action position 1250, right after the existing status action at 1200). The TC does NOT open at startup.
+
+Flow:
+
+1. `componentOpened()` builds a `JediTermWidget` on the EDT, then posts to `RequestProcessor("ClaudeTerminal")` to spawn the CLI off-EDT.
+2. `ClaudeProcessLauncher.launch()` resolves the cwd (first open project's dir, fall back to `user.home`), populates an env map with `CLAUDE_CODE_SSE_PORT=<port>` and `ENABLE_IDE_INTEGRATION=true` (read from the existing `ClaudeCodeStatusService` Lookup service), and spawns `claude` via `PtyProcessBuilder` from pty4j. The two env vars guarantee the spawned CLI binds to **this** NetBeans even if other IDE lock files exist.
+3. The returned `PtyProcess` is wrapped in `ProcessTtyConnector` (`ClaudeTtyConnector` inner class) and attached to the widget on the EDT via `widget.setTtyConnector(...)` + `widget.start()`.
+4. `PtyProcess.onExit()` is wired to swap the widget for a small "Claude exited — [Restart]" panel.
+5. `componentClosed()` calls `process.destroy()` and `widget.close()`.
+
+To override the CLI path during development, set the JVM system property `claude.code.cli` (e.g. `-J-Dclaude.code.cli=/path/to/claude` in `etc/netbeans.conf`).
+
+Native libraries: pty4j ships per-platform `.so`/`.dylib`/`.dll` inside its JAR and extracts them at runtime. The `nbm-maven-plugin` auto-bundles the pty4j JAR into `modules/ext/`, so resource loading works out of the box. If extraction fails on a hardened filesystem, set `-Dpty4j.preferred.native.folder=/some/writable/dir` in `etc/netbeans.conf`.
+
+Licensing: project is **ISC**; JediTerm 3.68 is **LGPL-3.0**; pty4j is **EPL-1.0**. Bundling LGPL/EPL libraries in an ISC-licensed plugin is permitted but the README and "About" entry must list them.
+
 ## Conventions specific to this codebase
 
 - **Security boundary:** every file-touching tool must validate paths with `NbUtils.isPathWithinOpenProjects(...)` (canonicalizes the path and confirms it sits inside an open project dir). Preserve this check when adding file operations.
-- **Threading:** UI work (opening editors, diff components) must run on the EDT via `SwingUtilities.invokeLater`; background/server work uses the module's `RequestProcessor`.
+- **Threading:** UI work (opening editors, diff components, JediTerm widget creation/start/close) must run on the EDT via `SwingUtilities.invokeLater`; background/server work and PTY process spawning use a `RequestProcessor`.
 - **Line/column indexing is inconsistent by design** to match what each consumer expects: `NbUtils.getCurrentSelectionData` reports **1-based** lines, while the `selection_changed` notification in `NetBeansMCPHandler` reports **0-based** lines/characters. Don't "fix" one to match the other without checking the protocol consumer.
 </content>
 </invoke>
